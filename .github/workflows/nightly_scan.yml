@@ -28,5 +28,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Copy example configuration if you haven't committed a customized one
+          # 1. Initialize the directory structure automatically
+          autopilot init
+          # 2. Trigger the scan
           autopilot scan
