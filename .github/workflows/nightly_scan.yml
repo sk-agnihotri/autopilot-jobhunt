@@ -28,7 +28,20 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # 1. Initialize the directory structure automatically
+          # 1. Initialize the framework folders
           autopilot init
-          # 2. Trigger the scan
+          
+          # 2. Inject your secure API keys into the expected backend environment layout
+          echo "TINYFISH_API_KEY=${TINYFISH_API_KEY}" > .env
+          echo "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" >> .env
+          echo "TELEGRAM_TOKEN=${TELEGRAM_TOKEN}" >> .env
+          echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .env
+          
+          # 3. Align your repository's custom configuration with the application paths
+          cp config.json ~/.autopilot/config.json || cp config.json config.json
+          
+          # 4. Map your unique resume file to the template path the scanner executes against
+          cp resume/SAUMYA_RESUME.md resume/YOUR_RESUME.md || cp resume/SAUMYA_RESUME.md ~/.autopilot/resume/YOUR_RESUME.md 2>/dev/null || true
+          
+          # 5. Trigger the job search scan
           autopilot scan
