@@ -37,12 +37,5 @@ jobs:
           echo "TELEGRAM_TOKEN=${TELEGRAM_TOKEN}" >> .env
           echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .env
           
-          # 3. Force overwrite the auto-generated config with your committed config.json
-          # (Using an absolute path to the local directory avoids the 'same file' safety warning)
-          cp -f ./config.json ./config.json
-          
-          # 4. Overwrite the auto-generated template resume with SAUMYA_RESUME.md
-          cp -f ./resume/SAUMYA_RESUME.md ./resume/YOUR_RESUME.md
-          
-          # 5. Fire the scan agent
+          # 3. Fire the scan agent
           autopilot scan
