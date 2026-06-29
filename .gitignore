@@ -8,7 +8,6 @@ venv/
 
 # Secrets — NEVER commit
 .env
-config.json
 
 # Runtime state — personal data
 state/*.json
@@ -16,10 +15,6 @@ output/
 !output/.gitkeep
 scan.log
 *.log
-
-# Personal resume — add your own, never commit
-resume/*.md
-!resume/YOUR_RESUME.md
 
 # Demo source videos — heavy; commit the generated GIF only
 demo/*.mp4
