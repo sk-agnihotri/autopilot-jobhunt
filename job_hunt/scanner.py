@@ -2,7 +2,7 @@ import csv
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from tinyfish import RateLimitError, TinyFish
@@ -57,6 +57,7 @@ For each job output:
 {{
   "job_number": 1,
   "score": 0-100,
+  "company": "extracted hiring company name (or keep original if already correct)",
   "title": "extracted job title",
   "stack": "key tech from JD (comma-separated, max 6 items)",
   "location_remote": "location + remote policy",
@@ -92,7 +93,16 @@ def _build_candidate_profile(config: dict) -> str:
 
 
 def is_job_url(url: str) -> bool:
-    return bool(JOB_URL_RE.search(url)) or bool(ATS_JOB_RE.search(url))
+    if bool(JOB_URL_RE.search(url)) or bool(ATS_JOB_RE.search(url)):
+        return True
+    lower_url = url.lower()
+    if "linkedin.com/jobs/view" in lower_url or "linkedin.com/jobs" in lower_url:
+        return True
+    if "indeed.com/viewjob" in lower_url or "indeed.com/rc/clk" in lower_url:
+        return True
+    if "naukri.com/job-listings" in lower_url:
+        return True
+    return False
 
 
 def is_ats_listing(url: str) -> bool:
@@ -140,7 +150,103 @@ def _fetch_links(tf: TinyFish, urls: list[str]) -> dict[str, list[str]]:
     return result
 
 
-def discover_job_urls(tf: TinyFish, company: dict, seen_urls: set) -> list[dict]:
+def extract_role_from_profile(config: dict, resume: str) -> str:
+    cand_profile = _build_candidate_profile(config)
+    prompt = f"""Based on the candidate profile and resume below, extract the primary job title/role they are seeking as a simple short search query (e.g., "Data Engineer" or "ML Engineer" or "Software Engineer"). 
+Output ONLY the short role name, no other text or explanation.
+
+CANDIDATE PROFILE:
+{cand_profile}
+
+RESUME:
+{resume[:1500]}
+"""
+    try:
+        role = chat_with_llm(
+            config,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        role = role.strip().strip('"').strip("'")
+        role = re.sub(r"^role:\s*", "", role, flags=re.IGNORECASE)
+        if "\n" in role:
+            role = role.split("\n")[0]
+        return role.strip()
+    except Exception as e:
+        logger.error(f"Failed to extract role via LLM: {e}")
+        return "ML Engineer"
+
+
+def build_search_query(domain: str, role: str) -> str:
+    if not role:
+        return (
+            f'site:{domain} (senior OR staff OR principal OR lead) '
+            '("data scientist" OR "ML engineer" OR "machine learning engineer" '
+            'OR "AI engineer" OR MLOps OR "deep learning")'
+        )
+    return f'site:{domain} (senior OR staff OR principal OR lead) "{role}"'
+
+
+def discover_platform_jobs(tf: TinyFish, role: str, yesterday_date: str, seen_urls: set) -> list[dict]:
+    platforms = [
+        {
+            "name": "LinkedIn",
+            "query": f'site:linkedin.com/jobs "{role}" after:{yesterday_date}'
+        },
+        {
+            "name": "Indeed",
+            "query": f'(site:indeed.com/viewjob OR site:indeed.com/rc/clk) "{role}" after:{yesterday_date}'
+        },
+        {
+            "name": "Naukri",
+            "query": f'site:naukri.com/job-listings "{role}" after:{yesterday_date}'
+        }
+    ]
+    
+    platform_jobs = []
+    for platform in platforms:
+        logger.info(f"Scanning {platform['name']} for '{role}' jobs in the past 24h...")
+        found_urls = set()
+        for attempt in range(2):
+            try:
+                resp = tf.search.query(platform["query"], language="en")
+                search_new = 0
+                for r in resp.results:
+                    if is_job_url(r.url) and r.url not in seen_urls:
+                        found_urls.add(r.url)
+                        search_new += 1
+                logger.info(f"  [{platform['name']}] Search: {len(resp.results)} results, {search_new} new job URLs")
+                time.sleep(13)
+                break
+            except RateLimitError:
+                logger.warning(f"  [{platform['name']}] Search rate-limited — waiting 60s...")
+                time.sleep(62)
+            except Exception as e:
+                logger.error(f"  [{platform['name']}] Search error: {e}")
+                time.sleep(13)
+                break
+        
+        jobs = [
+            {
+                "url": u,
+                "title": u.split("/")[-1].replace("-", " ").title(),
+                "snippet": "",
+                "company": platform["name"],
+                "location": "Remote / India",
+                "region": "Remote",
+            }
+            for u in found_urls
+        ]
+        platform_jobs.extend(jobs)
+        
+    return platform_jobs
+
+
+def _is_placeholder(val: str) -> bool:
+    return val.startswith("YOUR_") or val.endswith("_HERE") or val.endswith("_here")
+
+
+def discover_job_urls(tf: TinyFish, company: dict, seen_urls: set, role: str) -> list[dict]:
     found_urls: set[str] = set()
 
     logger.debug(f"  [{company['name']}] Fetching careers page: {company['careers_url']}")
@@ -163,7 +269,7 @@ def discover_job_urls(tf: TinyFish, company: dict, seen_urls: set) -> list[dict]
                         ats_jobs += 1
             logger.debug(f"  [{company['name']}] ATS expansion: {ats_jobs} additional job links")
 
-    query = SEARCH_QUERY.format(domain=company["search_domain"])
+    query = build_search_query(company["search_domain"], role)
     logger.debug(f"  [{company['name']}] Search query: {query}")
     for attempt in range(2):
         try:
@@ -282,6 +388,8 @@ def score_jobs(jobs: list[dict], resume: str, config: dict) -> list[dict]:
                     "reason": reason,
                 }
             )
+            if "company" in item:
+                job["company"] = item["company"]
             results.append(job)
 
     passing = len(results)
@@ -338,7 +446,7 @@ def run_scan(config: dict, companies: list[dict]) -> None:
     total = len(companies)
     logger.info(f"=== Scan started — {total} companies to check ===")
     logger.info(f"Candidate: {config.get('candidate', {}).get('name', 'unknown')}")
-    logger.info(f"Min score: {config.get('candidate', {}).get('min_score', 55)} | Top N: {config.get('candidate', {}).get('top_n', 5)}")
+    logger.info(f"Min score: {config.get('candidate', {}).get('min_score', 55)} | Top N: {config.get('candidate', {}).get('top_n', 15)}")
     provider = config.get("llm_provider") or "openrouter"
     model_by_provider = {
         "openrouter": config.get("openrouter_model", "default"),
@@ -359,21 +467,52 @@ def run_scan(config: dict, companies: list[dict]) -> None:
     logger.debug(f"Resume loaded: {resume_path} ({len(resume)} chars)")
 
     min_score = config.get("candidate", {}).get("min_score", 55)
-    top_n = config.get("candidate", {}).get("top_n", 5)
+    top_n = config.get("candidate", {}).get("top_n", 15)
 
     state = load_state()
     seen_urls: set = set(state.get("seen_urls", []))
     logger.info(f"State loaded — {len(seen_urls)} previously seen URLs")
+
+    # 1. Determine the role to search
+    cand = config.get("candidate", {})
+    role = cand.get("role")
+    if not role or _is_placeholder(role):
+        logger.info("Extracting search role from candidate profile and resume...")
+        role = extract_role_from_profile(config, resume)
+        logger.info(f"Extracted role: {role}")
 
     all_scored_jobs: list[dict] = []
     errors: list[str] = []
     companies_scanned = 0
     companies_with_jobs = 0
 
+    # 2. First search LinkedIn, Naukri and Indeed for past 24 hr listings
+    yesterday_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    platform_jobs = discover_platform_jobs(tf, role, yesterday_date, seen_urls)
+    if platform_jobs:
+        logger.info(f"Found {len(platform_jobs)} new job URL(s) from platforms — fetching details...")
+        platform_jobs = fetch_job_details(tf, platform_jobs)
+        seen_urls.update(j["url"] for j in platform_jobs)
+
+        logger.info(f"Scoring {len(platform_jobs)} platform job(s)...")
+        try:
+            for i in range(0, len(platform_jobs), 10):
+                batch = platform_jobs[i : i + 10]
+                logger.debug(f"Scoring platform batch {i // 10 + 1} ({len(batch)} jobs)...")
+                batch_scored = score_jobs(batch, resume, config)
+                all_scored_jobs.extend(batch_scored)
+                companies_with_jobs += 1
+        except Exception as score_err:
+            logger.error(f"Platform scoring failed: {score_err}")
+            errors.append(f"⚠️ Platform scoring failed: {score_err}")
+            logger.warning(f"Saving {len(platform_jobs)} unscored platform job(s) as fallback")
+            all_scored_jobs.extend(platform_jobs)
+
+    # 3. Scan the maintained companies
     for idx, company in enumerate(companies, 1):
         logger.info(f"[{idx}/{total}] Scanning {company['name']}...")
         try:
-            new_jobs = discover_job_urls(tf, company, seen_urls)
+            new_jobs = discover_job_urls(tf, company, seen_urls, role)
             if not new_jobs:
                 logger.info("  No new job URLs found")
                 companies_scanned += 1

@@ -75,9 +75,10 @@ def sample_config():
         "candidate": {
             "name": "Test Candidate",
             "resume_path": "resume/YOUR_RESUME.md",
+            "role": "Data Engineer",
         },
         "min_score": 7,
-        "top_n": 5,
+        "top_n": 15,
     }
 
 
