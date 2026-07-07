@@ -9,6 +9,7 @@ Usage:
   autopilot export --min 60   — export only jobs with score >= 60
   autopilot export --days 7   — export jobs from last 7 days (requires scan history)
   autopilot export --days 7 --min 60  — combine filters
+  autopilot mcp               — run the MCP server over stdio (for Claude Code)
 """
 import csv
 import json
@@ -37,7 +38,9 @@ def _use_env(val: str | None) -> bool:
     init` writes with `your_..._here` values) would clobber real keys in
     config.json — the classic "config.json and .env don't compose" bug.
     """
-    return bool(val) and not _is_placeholder(val)
+    if not val:
+        return False
+    return not _is_placeholder(val)
 
 
 def load_config() -> dict:
@@ -61,7 +64,7 @@ def load_config() -> dict:
 
     for env_key, config_key in env_mapping.items():
         val = os.getenv(env_key)
-        if _use_env(val):
+        if val is not None and _use_env(val):
             if env_key == "OPENROUTER_FALLBACK_MODELS":
                 config[config_key] = [m.strip() for m in val.split(",")]
             else:
@@ -234,6 +237,13 @@ def main() -> None:
         init_project()
         return
 
+    # mcp starts the stdio server; it loads config lazily per tool call, so it
+    # must NOT require config.json to exist just to launch.
+    if cmd == "mcp":
+        from job_hunt.mcp_server import mcp
+        mcp.run()
+        return
+
     # export reads local scan state only — no API keys needed, so skip load_config()
     if cmd == "export":
         min_score, days = _parse_export_args(sys.argv)
@@ -253,7 +263,7 @@ def main() -> None:
         draft_application(config, sys.argv[2])
 
     else:
-        sys.exit(f"Unknown command: {cmd}\nUse: scan | draft | export")
+        sys.exit(f"Unknown command: {cmd}\nUse: init | scan | draft | export | mcp")
 
 
 if __name__ == "__main__":

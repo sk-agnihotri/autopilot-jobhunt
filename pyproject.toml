@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autopilot-jobhunt"
-version = "0.4.0"
+version = "0.4.3"
 description = "AI-powered job scanner, scorer, and application drafter. Finds jobs while you sleep."
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,7 +13,11 @@ keywords = ["job-search", "ai", "automation", "mcp", "llm", "openrouter"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
+    "Typing :: Typed",
     "Topic :: Office/Business",
 ]
 dependencies = [
@@ -24,12 +28,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
+mcp = ["mcp>=1.9"]
 claude = ["anthropic>=0.30.0"]
-dev = ["pytest>=8.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "pytest-cov>=4.0", "ruff>=0.4", "mypy>=1.8", "mcp>=1.9"]
 
 [project.scripts]
 autopilot = "job_hunt.main:main"
+# Alias matching the PyPI distribution name so MCP-registry runners that derive
+# the executable from the package name (e.g. `uvx autopilot-jobhunt mcp`, per
+# server.json packageArguments) resolve to a real command.
+autopilot-jobhunt = "job_hunt.main:main"
 
 [project.urls]
 Homepage = "https://github.com/tarunlnmiit/autopilot-jobhunt"
@@ -47,3 +55,15 @@ ignore = ["E501"]
 [tool.hatch.build.targets.wheel]
 packages = ["job_hunt"]
 include = ["job_hunt/data/**"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+files = ["job_hunt"]
+
+[tool.coverage.run]
+source = ["job_hunt"]
+
+[tool.coverage.report]
+# The mocked suite must not silently regress. Gate sits below the current ~90%.
+fail_under = 85
