@@ -18,6 +18,11 @@ def test_is_job_url():
     assert scanner.is_job_url("https://x.co/jobs/ml-engineer-123")
     assert scanner.is_job_url("https://boards.greenhouse.io/acme/jobs/456789")
     assert not scanner.is_job_url("https://x.co/about")
+    # Platform job URLs
+    assert scanner.is_job_url("https://in.linkedin.com/jobs/view/senior-data-engineer-1234")
+    assert scanner.is_job_url("https://www.indeed.com/viewjob?jk=77c9ff791ab")
+    assert scanner.is_job_url("https://www.indeed.com/rc/clk?jk=12345")
+    assert scanner.is_job_url("https://www.naukri.com/job-listings-python-dev-123")
 
 
 def test_is_ats_listing():
@@ -108,11 +113,25 @@ def test_discover_job_urls(monkeypatch):
                   search_urls=["https://x.co/jobs/staff-ai-wxyz"])
     company = {"name": "Acme", "careers_url": "https://x.co/careers",
                "search_domain": "x.co", "location": "Remote", "region": "EU"}
-    out = scanner.discover_job_urls(tf, company, set())
+    out = scanner.discover_job_urls(tf, company, set(), "ML Engineer")
     urls = {j["url"] for j in out}
     assert "https://x.co/jobs/ml-engineer-abcd" in urls
     assert "https://x.co/jobs/staff-ai-wxyz" in urls
     assert all(j["company"] == "Acme" for j in out)
+
+
+def test_extract_role_from_profile(monkeypatch):
+    monkeypatch.setattr(scanner, "chat_with_llm", lambda *a, **k: "Data Engineer")
+    cfg = {"candidate": {"name": "Ada", "profile": "DE"}}
+    role = scanner.extract_role_from_profile(cfg, "resume content")
+    assert role == "Data Engineer"
+
+
+def test_discover_platform_jobs(monkeypatch):
+    tf = _fake_tf(search_urls=["https://www.linkedin.com/jobs/view/123", "https://www.indeed.com/viewjob?jk=abc"])
+    jobs = scanner.discover_platform_jobs(tf, "Data Engineer", "2026-07-06", set())
+    assert len(jobs) > 0
+    assert any(j["company"] in ("LinkedIn", "Indeed", "Naukri") for j in jobs)
 
 
 def test_fetch_job_details(monkeypatch):
@@ -140,9 +159,10 @@ def scan_setup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "resume.md").write_text("Senior ML engineer, 10 YOE.")
     monkeypatch.setattr(scanner, "TinyFish", lambda **_: object())
-    monkeypatch.setattr(scanner, "discover_job_urls", lambda tf, co, seen: [
+    monkeypatch.setattr(scanner, "discover_job_urls", lambda tf, co, seen, role: [
         {"url": "https://x.co/jobs/1", "title": "MLE", "company": co["name"],
          "location": co["location"], "region": co["region"]}])
+    monkeypatch.setattr(scanner, "discover_platform_jobs", lambda *a: [])
     monkeypatch.setattr(scanner, "fetch_job_details", lambda tf, jobs: jobs)
     monkeypatch.setattr(scanner, "score_jobs", lambda jobs, resume, cfg: [
         {**jobs[0], "score": 90, "extracted_title": "MLE", "reason": "fit", "stack": "Py"}])
